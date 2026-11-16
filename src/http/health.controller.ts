@@ -35,8 +35,9 @@ export class HealthController {
 
   private async checkPostgres(): Promise<CheckStatus> {
     try {
-      const result = await withTimeout(this.orm.checkConnection(), CHECK_TIMEOUT_MS);
-      return result.ok ? 'up' : 'down';
+      // no MikroORM 7 a conexão é lazy: checkConnection() só reflete conexões já abertas
+      await withTimeout(this.orm.em.getConnection().execute('select 1'), CHECK_TIMEOUT_MS);
+      return 'up';
     } catch {
       return 'down';
     }
