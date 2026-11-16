@@ -1,10 +1,11 @@
 import { Money } from '../../domain/money/money';
 import { LedgerDirection, WalletLedgerEntry } from '../../domain/ledger/wallet-ledger-entry';
+import { InboxMessage } from '../../domain/messaging/inbox-message';
 import { OutboxMessage } from '../../domain/messaging/outbox-message';
 import { Wallet } from '../../domain/wallet/wallet';
 import { WagerTransaction } from '../../domain/wagering/wager-transaction';
 import type { FailureCode, WagerTransactionKind, WagerTransactionStatus } from '../../domain/wagering/wager-types';
-import type { LedgerEntryRecord, OutboxRecord, WagerTransactionRecord, WalletRecord } from './entities';
+import type { InboxRecord, LedgerEntryRecord, OutboxRecord, WagerTransactionRecord, WalletRecord } from './entities';
 
 // Valor e moeda ficam em colunas separadas (NUMERIC(20,2) + CHAR(3)); o driver devolve o
 // NUMERIC como string, que é reidratado como Money sem passar por number.
@@ -114,6 +115,26 @@ export function ledgerEntryData(entry: WalletLedgerEntry): LedgerEntryRecord {
     balanceBefore: amountOf(entry.balanceBefore),
     balanceAfter: amountOf(entry.balanceAfter),
     createdAt: entry.createdAt,
+  };
+}
+
+export function toInboxMessage(record: InboxRecord): InboxMessage {
+  return InboxMessage.rehydrate({
+    consumerName: record.consumerName,
+    messageId: record.messageId,
+    payloadHash: record.payloadHash,
+    receivedAt: record.receivedAt,
+    processedAt: record.processedAt ?? undefined,
+  });
+}
+
+export function inboxData(message: InboxMessage): InboxRecord {
+  return {
+    consumerName: message.consumerName,
+    messageId: message.messageId,
+    payloadHash: message.payloadHash,
+    receivedAt: message.receivedAt,
+    processedAt: message.processedAt ?? null,
   };
 }
 

@@ -8,12 +8,14 @@ import {
   UniqueConstraintViolationException,
 } from '@mikro-orm/postgresql';
 import type { WalletLedgerEntry } from '../../domain/ledger/wallet-ledger-entry';
+import type { InboxMessage } from '../../domain/messaging/inbox-message';
 import type { OutboxMessage } from '../../domain/messaging/outbox-message';
 import type { Wallet } from '../../domain/wallet/wallet';
 import type { WagerTransaction } from '../../domain/wagering/wager-transaction';
 import { WagerTransactionKind, WagerTransactionStatus } from '../../domain/wagering/wager-types';
 import { DuplicateKeyError, TransientFailureError, type UniqueKey } from '../../application/errors';
 import type {
+  InboxRepository,
   LedgerRepository,
   OutboxRepository,
   TransactionalRepositories,
@@ -22,6 +24,7 @@ import type {
   WalletRepository,
 } from '../../application/ports';
 import {
+  InboxEntity,
   LedgerEntryEntity,
   OutboxEntity,
   type OutboxRecord,
@@ -31,8 +34,10 @@ import {
   type WalletRecord,
 } from './entities';
 import {
+  inboxData,
   ledgerEntryData,
   outboxData,
+  toInboxMessage,
   toOutboxMessage,
   toWagerTransaction,
   toWallet,
@@ -45,6 +50,7 @@ const UNIQUE_KEYS: Record<string, UniqueKey> = {
   wager_transactions_idempotency_key_key: 'transaction-idempotency-key',
   wager_transactions_provider_external_key: 'transaction-external-id',
   wager_transactions_single_reversal_idx: 'transaction-reversal',
+  inbox_messages_pkey: 'inbox-message',
 };
 
 // lock_not_available (lock_timeout), deadlock e falha de serialização
@@ -80,6 +86,7 @@ export class MikroOrmUnitOfWork implements UnitOfWork {
           wallets: new MikroOrmWalletRepository(em),
           transactions: new MikroOrmWagerTransactionRepository(em),
           ledger: new MikroOrmLedgerRepository(em),
+          inbox: new MikroOrmInboxRepository(em),
           outbox: new MikroOrmOutboxRepository(em),
         });
       });
@@ -202,6 +209,19 @@ class MikroOrmLedgerRepository implements LedgerRepository {
 
   add(entry: WalletLedgerEntry): void {
     this.em.create(LedgerEntryEntity, ledgerEntryData(entry));
+  }
+}
+
+class MikroOrmInboxRepository implements InboxRepository {
+  constructor(private readonly em: EntityManager) {}
+
+  async find(consumerName: string, messageId: string): Promise<InboxMessage | undefined> {
+    const record = await this.em.findOne(InboxEntity, { consumerName, messageId });
+    return record ? toInboxMessage(record) : undefined;
+  }
+
+  add(message: InboxMessage): void {
+    this.em.create(InboxEntity, inboxData(message));
   }
 }
 

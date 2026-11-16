@@ -232,7 +232,7 @@ describe('submissão de transação', () => {
 });
 
 describe('atomicidade', () => {
-  it('falha no meio da transação não deixa wallet, transação, ledger nem outbox gravados', async () => {
+  it('falha no meio da transação não deixa wallet, transação, ledger, inbox nem outbox gravados', async () => {
     const failing = await createTestContext({
       uow: (base): UnitOfWork => ({
         run: (work) =>
@@ -253,11 +253,13 @@ describe('atomicidade', () => {
     try {
       const w = await wallet('100.00');
       const command = bet(w, '25.00');
-      await expect(failing.process.execute(command)).rejects.toThrow('outbox indisponível');
+      const delivery = { consumerName: 'test-consumer', messageId: `msg-${crypto.randomUUID()}`, payloadHash: 'a'.repeat(64), receivedAt: new Date() };
+      await expect(failing.process.execute(command, delivery)).rejects.toThrow('outbox indisponível');
 
       expect((await ctx.queries.getWallet(w.id)).balance.amount).toBe('100.00');
       expect(await sql(ctx, 'select 1 from wager_transactions where idempotency_key = ?', [command.idempotencyKey])).toHaveLength(0);
       expect(await ledgerOf(w.id)).toHaveLength(1);
+      expect(await sql(ctx, 'select 1 from inbox_messages where message_id = ?', [delivery.messageId])).toHaveLength(0);
     } finally {
       await failing.close();
     }

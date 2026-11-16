@@ -48,6 +48,15 @@ export class ExternalTransactionConflictError extends ApplicationError {
   }
 }
 
+/** Mesmo messageId da fila já consumido com outro conteúdo. */
+export class MessageConflictError extends ApplicationError {
+  readonly code = 'MESSAGE_ID_REUSED';
+
+  constructor(messageId: string) {
+    super(`message ${messageId} was already consumed with a different payload`);
+  }
+}
+
 export class InvalidRequestError extends ApplicationError {
   constructor(
     readonly code: string,
@@ -73,6 +82,7 @@ export type UniqueKey =
   | 'transaction-idempotency-key'
   | 'transaction-external-id'
   | 'transaction-reversal'
+  | 'inbox-message'
   | 'other';
 
 /** Violação de unicidade detectada pelo banco, em geral por uma corrida entre instâncias. */

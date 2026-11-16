@@ -1,4 +1,5 @@
 import type { WalletLedgerEntry } from '../domain/ledger/wallet-ledger-entry';
+import type { InboxMessage } from '../domain/messaging/inbox-message';
 import type { OutboxMessage } from '../domain/messaging/outbox-message';
 import type { WagerTransaction } from '../domain/wagering/wager-transaction';
 import type { Wallet } from '../domain/wallet/wallet';
@@ -39,6 +40,11 @@ export interface LedgerRepository {
   add(entry: WalletLedgerEntry): void;
 }
 
+export interface InboxRepository {
+  find(consumerName: string, messageId: string): Promise<InboxMessage | undefined>;
+  add(message: InboxMessage): void;
+}
+
 export interface OutboxRepository {
   add(message: OutboxMessage): void;
   /** Trava um lote de mensagens pendentes e vencidas (FOR UPDATE SKIP LOCKED), das mais antigas para as mais novas. */
@@ -61,6 +67,7 @@ export interface TransactionalRepositories {
   wallets: WalletRepository;
   transactions: WagerTransactionRepository;
   ledger: LedgerRepository;
+  inbox: InboxRepository;
   outbox: OutboxRepository;
 }
 
