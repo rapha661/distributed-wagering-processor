@@ -41,11 +41,13 @@ export class WagerSettlement {
       throw new InvalidStateError(`transaction ${transaction.id} does not belong to wallet ${wallet.id}`);
     }
 
+    // Nestas duas rejeições o saldo não é registrado: seria o saldo de outro jogador
+    // ou um valor em outra moeda, e ele volta na resposta ao provedor.
     if (transaction.playerId !== wallet.playerId) {
-      return WagerSettlement.reject(transaction, FailureCode.PlayerWalletMismatch, ctx);
+      return WagerSettlement.reject(transaction, FailureCode.PlayerWalletMismatch, ctx, { withBalance: false });
     }
     if (transaction.money.currency !== wallet.currency) {
-      return WagerSettlement.reject(transaction, FailureCode.CurrencyMismatch, ctx);
+      return WagerSettlement.reject(transaction, FailureCode.CurrencyMismatch, ctx, { withBalance: false });
     }
 
     const check = WagerSettlement.checkReference(transaction, ctx);
@@ -131,8 +133,9 @@ export class WagerSettlement {
     transaction: WagerTransaction,
     code: FailureCode,
     ctx: SettlementContext,
+    { withBalance } = { withBalance: true },
   ): SettlementOutcome {
-    transaction.reject(code, ctx.at, ctx.wallet.balance);
+    transaction.reject(code, ctx.at, withBalance ? ctx.wallet.balance : undefined);
     return { type: 'rejected', failureCode: code };
   }
 }

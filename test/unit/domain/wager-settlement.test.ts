@@ -292,18 +292,27 @@ describe('WagerSettlement', () => {
   });
 
   describe('validações da wallet', () => {
-    it('conflito de moeda é rejeitado sem lançamento', () => {
+    it('conflito de moeda é rejeitado sem lançamento e sem saldo em outra moeda', () => {
       const wallet = aWallet('100.00');
       const bet = aTransaction(Bet, '10.00', { money: usd('10.00') });
       expect(settle(bet, wallet)).toEqual({ type: 'rejected', failureCode: FailureCode.CurrencyMismatch });
+      expect(bet.observedBalance).toBeUndefined();
       expect(wallet.balance.equals(brl('100.00'))).toBe(true);
       expect(wallet.version).toBe(1);
     });
 
-    it('jogador diferente do dono da wallet é rejeitado', () => {
+    it('jogador diferente do dono da wallet é rejeitado sem expor o saldo', () => {
       const wallet = aWallet('100.00', { playerId: 'dono' });
       const bet = aTransaction(Bet, '10.00');
       expect(settle(bet, wallet)).toEqual({ type: 'rejected', failureCode: FailureCode.PlayerWalletMismatch });
+      expect(bet.observedBalance).toBeUndefined();
+    });
+
+    it('nas demais rejeições registra o saldo observado', () => {
+      const wallet = aWallet('5.00');
+      const bet = aTransaction(Bet, '10.00');
+      settle(bet, wallet);
+      expect(bet.observedBalance?.equals(brl('5.00'))).toBe(true);
     });
 
     it('transação terminal não é liquidada de novo', () => {
