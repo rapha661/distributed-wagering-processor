@@ -7,6 +7,7 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1).default('postgres://wagering:wagering@localhost:5432/wagering'),
   DATABASE_POOL_MAX: z.coerce.number().int().positive().default(20),
   DATABASE_LOCK_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+  DATABASE_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
   REFERENCE_RETRY_BASE_MS: z.coerce.number().int().positive().default(2_000),
   REFERENCE_RETRY_MAX_MS: z.coerce.number().int().positive().default(300_000),
   REFERENCE_RETRY_MAX_ATTEMPTS: z.coerce.number().int().positive().default(8),

@@ -49,7 +49,17 @@ const UNIQUE_KEYS: Record<string, UniqueKey> = {
 
 // lock_not_available (lock_timeout), deadlock e falha de serialização
 const LOCK_CONFLICT_CODES = new Set(['55P03', '40P01', '40001']);
-const TRANSIENT_NETWORK_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE', '57P01', '57P03']);
+const TRANSIENT_NETWORK_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EPIPE',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EAI_AGAIN',
+  '57P01',
+  '57P03',
+]);
 
 /**
  * Unit of Work sobre `EntityManager.transactional()`: cada execução usa um EntityManager
@@ -89,7 +99,9 @@ export function translatePersistenceError(error: unknown): unknown {
   if (error instanceof LockWaitTimeoutException || error instanceof DeadlockException || isCode(LOCK_CONFLICT_CODES)) {
     return new TransientFailureError('LOCK_TIMEOUT', 'wallet is busy, retry later', { cause: error });
   }
-  if (error instanceof ConnectionException || isCode(TRANSIENT_NETWORK_CODES)) {
+  // timeout de conexão do pg não traz código, só a mensagem
+  const connectTimeout = error instanceof Error && /timeout exceeded when trying to connect|connection timeout/i.test(error.message);
+  if (error instanceof ConnectionException || isCode(TRANSIENT_NETWORK_CODES) || connectTimeout) {
     return new TransientFailureError('DEPENDENCY_UNAVAILABLE', 'database unavailable, retry later', { cause: error });
   }
   return error;
