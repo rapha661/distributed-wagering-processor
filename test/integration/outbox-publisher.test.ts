@@ -90,8 +90,7 @@ describe('PublishOutbox', () => {
       },
     };
 
-    expect(new PublishOutbox(ctx.uow, crashing, new TestClock(), 50).publishBatch()).rejects.toThrow('processo morreu');
-    await Bun.sleep(100);
+    await expect(new PublishOutbox(ctx.uow, crashing, new TestClock(), 50).publishBatch()).rejects.toThrow('processo morreu');
     expect(await pendingIds()).toEqual(ids);
 
     expect(await new PublishOutbox(ctx.uow, publisherFor(), new TestClock(), 50).publishBatch()).toMatchObject({ published: 4 });

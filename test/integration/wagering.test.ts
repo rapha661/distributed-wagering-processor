@@ -10,7 +10,19 @@ import type { UnitOfWork } from '../../src/application/ports';
 import { InvalidMoneyError } from '../../src/domain/money/money';
 import { InvalidWagerTransactionError } from '../../src/domain/wagering/wager-transaction';
 import { WagerTransactionKind } from '../../src/domain/wagering/wager-types';
-import { bet, createTestContext, expectConsistent, openWallet, sql, type TestContext, wager } from './support/context';
+import { MikroORM } from '@mikro-orm/postgresql';
+import { createOrmConfig } from '../../src/infrastructure/persistence/mikro-orm.config';
+import { MikroOrmUnitOfWork } from '../../src/infrastructure/persistence/mikro-orm-unit-of-work';
+import {
+  bet,
+  createTestContext,
+  expectConsistent,
+  holdWalletLock,
+  openWallet,
+  sql,
+  type TestContext,
+  wager,
+} from './support/context';
 
 const { Win, Loss, Refund, Rollback } = WagerTransactionKind;
 
@@ -81,8 +93,7 @@ describe('criação de wallet', () => {
       initialBalance: { amount: '50.00', currency: 'BRL' },
       correlationId: 't',
     });
-    expect(duplicate).rejects.toBeInstanceOf(WalletAlreadyExistsError);
-    await duplicate.catch(() => undefined);
+    await expect(duplicate).rejects.toBeInstanceOf(WalletAlreadyExistsError);
   });
 
   it('rejeita saldo inicial inválido', async () => {
@@ -91,8 +102,7 @@ describe('criação de wallet', () => {
       initialBalance: { amount: '-1.00', currency: 'BRL' },
       correlationId: 't',
     });
-    expect(invalid).rejects.toBeInstanceOf(InvalidMoneyError);
-    await invalid.catch(() => undefined);
+    await expect(invalid).rejects.toBeInstanceOf(InvalidMoneyError);
   });
 });
 
@@ -129,8 +139,7 @@ describe('submissão de transação', () => {
     await ctx.process.execute(command);
 
     const conflict = ctx.process.execute({ ...command, request: { ...command.request, money: { amount: '31.00', currency: 'BRL' } } });
-    expect(conflict).rejects.toBeInstanceOf(IdempotencyConflictError);
-    await conflict.catch(() => undefined);
+    await expect(conflict).rejects.toBeInstanceOf(IdempotencyConflictError);
     expect(await ledgerOf(w.id)).toHaveLength(2);
   });
 
@@ -139,8 +148,7 @@ describe('submissão de transação', () => {
     const command = bet(w, '30.00');
     await ctx.process.execute(command);
     const conflict = ctx.process.execute({ ...command, idempotencyKey: 'outra-key' });
-    expect(conflict).rejects.toBeInstanceOf(ExternalTransactionConflictError);
-    await conflict.catch(() => undefined);
+    await expect(conflict).rejects.toBeInstanceOf(ExternalTransactionConflictError);
   });
 
   it('saldo insuficiente é rejeitado, auditável e sem lançamento', async () => {
@@ -215,13 +223,11 @@ describe('submissão de transação', () => {
 
   it('wallet inexistente e payload inválido não gravam nada', async () => {
     const missing = ctx.process.execute(bet({ id: crypto.randomUUID(), playerId: crypto.randomUUID() }, '1.00'));
-    expect(missing).rejects.toBeInstanceOf(WalletNotFoundError);
-    await missing.catch(() => undefined);
+    await expect(missing).rejects.toBeInstanceOf(WalletNotFoundError);
 
     const w = await wallet('100.00');
     const opening = ctx.process.execute(wager(w, WagerTransactionKind.Opening, '1.00'));
-    expect(opening).rejects.toBeInstanceOf(InvalidWagerTransactionError);
-    await opening.catch(() => undefined);
+    await expect(opening).rejects.toBeInstanceOf(InvalidWagerTransactionError);
   });
 });
 
@@ -247,8 +253,7 @@ describe('atomicidade', () => {
     try {
       const w = await wallet('100.00');
       const command = bet(w, '25.00');
-      expect(failing.process.execute(command)).rejects.toThrow('outbox indisponível');
-      await failing.process.execute(command).catch(() => undefined);
+      await expect(failing.process.execute(command)).rejects.toThrow('outbox indisponível');
 
       expect((await ctx.queries.getWallet(w.id)).balance.amount).toBe('100.00');
       expect(await sql(ctx, 'select 1 from wager_transactions where idempotency_key = ?', [command.idempotencyKey])).toHaveLength(0);
@@ -261,24 +266,28 @@ describe('atomicidade', () => {
   it('lock ocupado além do timeout vira falha transitória, sem efeito', async () => {
     const quick = await createTestContext({ lockTimeoutMs: 200 });
     const w = await wallet('100.00');
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => (release = resolve));
+    const lock = await holdWalletLock(ctx, w.id);
     try {
-      const holder = ctx.orm.em.fork().transactional(async (em) => {
-        await em.execute('select 1 from wallets where id = ? for update', [w.id]);
-        await held;
-      });
-      await Bun.sleep(50);
-
-      const blocked = quick.process.execute(bet(w, '10.00'));
-      expect(blocked).rejects.toBeInstanceOf(TransientFailureError);
-      await blocked.catch(() => undefined);
-      release();
-      await holder;
-      expect(await ledgerOf(w.id)).toHaveLength(1);
+      await expect(quick.process.execute(bet(w, '10.00'))).rejects.toMatchObject({ code: 'LOCK_TIMEOUT' });
     } finally {
-      release();
+      await lock.release();
       await quick.close();
+    }
+    expect(await ledgerOf(w.id)).toHaveLength(1);
+  });
+
+  it('banco inacessível vira falha transitória em vez de pendurar a requisição', async () => {
+    const orm = await MikroORM.init(
+      createOrmConfig({ DATABASE_URL: 'postgres://u:p@10.255.255.1:5432/x', DATABASE_POOL_MAX: 1, DATABASE_CONNECT_TIMEOUT_MS: 300 }),
+    );
+    try {
+      const started = performance.now();
+      const run = new MikroOrmUnitOfWork(orm, 1_000).run(async () => 'nunca');
+      await expect(run).rejects.toBeInstanceOf(TransientFailureError);
+      await expect(run).rejects.toMatchObject({ code: 'DEPENDENCY_UNAVAILABLE' });
+      expect(performance.now() - started).toBeLessThan(3_000);
+    } finally {
+      await orm.close(true);
     }
   });
 });

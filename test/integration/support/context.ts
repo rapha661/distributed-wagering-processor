@@ -73,6 +73,41 @@ export function wager(
 export const bet = (wallet: { id: string; playerId: string }, amount: string, overrides = {}) =>
   wager(wallet, WagerTransactionKind.Bet, amount, overrides);
 
+/**
+ * Segura o lock da wallet numa transação à parte. Só retorna depois que o lock foi obtido, e
+ * nunca o segura por mais de `maxHoldMs`: mesmo que algo dê errado, o teste não trava.
+ */
+export async function holdWalletLock(ctx: TestContext, walletId: string, maxHoldMs = 5_000): Promise<{ release(): Promise<void> }> {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const timer = setTimeout(release, maxHoldMs);
+  let acquired!: () => void;
+  let failed!: (reason: unknown) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    acquired = resolve;
+    failed = reject;
+  });
+
+  const holder = ctx.orm.em
+    .fork()
+    .transactional(async (em) => {
+      await em.execute(`set local lock_timeout = ${maxHoldMs}`);
+      await em.execute('select 1 from wallets where id = ? for update', [walletId]);
+      acquired();
+      await released;
+    })
+    .catch(failed);
+
+  await ready;
+  return {
+    release: async () => {
+      clearTimeout(timer);
+      release();
+      await holder;
+    },
+  };
+}
+
 type Row = Record<string, unknown>;
 
 export async function sql<T extends Row = Row>(ctx: TestContext, query: string, params: unknown[] = []): Promise<T[]> {

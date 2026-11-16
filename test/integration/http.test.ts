@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import type { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../../src/app.module';
-import { createTestContext, expectConsistent, type TestContext } from './support/context';
+import { createTestContext, expectConsistent, holdWalletLock, type TestContext } from './support/context';
 import { TEST_DATABASE_URL } from './support/database';
 
 let app: INestApplication;
@@ -191,20 +191,13 @@ describe('POST /wagering/transactions', () => {
 
   it('503 com Retry-After quando a wallet está travada por mais que o timeout', async () => {
     const wallet = await createWallet();
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => (release = resolve));
-    const holder = ctx.orm.em.fork().transactional(async (em) => {
-      await em.execute('select 1 from wallets where id = ? for update', [wallet.id]);
-      await held;
-    });
+    const lock = await holdWalletLock(ctx, wallet.id);
     try {
-      await Bun.sleep(50);
       const response = await submit(wagerBody(wallet, 'BET', '1.00'));
       expect(response).toMatchObject({ status: 503, body: { code: 'LOCK_TIMEOUT' } });
       expect(response.headers.get('retry-after')).toBe('1');
     } finally {
-      release();
-      await holder;
+      await lock.release();
     }
   });
 });

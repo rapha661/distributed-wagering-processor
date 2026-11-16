@@ -27,7 +27,8 @@ async function expectViolation(operation: Promise<unknown>, sqlState: string, co
 }
 
 beforeAll(async () => {
-  orm = await connectTestDatabase();
+  // banco próprio: este arquivo derruba e recria o schema
+  orm = await connectTestDatabase('wagering_test_schema');
 });
 
 afterAll(async () => {
