@@ -4,7 +4,7 @@ import { OutboxMessage } from '../domain/messaging/outbox-message';
 import type { BackoffPolicy } from '../domain/shared/backoff-policy';
 import { WagerSettlement } from '../domain/wagering/wager-settlement';
 import { WagerTransaction } from '../domain/wagering/wager-transaction';
-import type { FailureCode, WagerTransactionKind, WagerTransactionStatus } from '../domain/wagering/wager-types';
+import { FailureCode, type WagerTransactionKind, type WagerTransactionStatus } from '../domain/wagering/wager-types';
 import {
   DuplicateKeyError,
   ExternalTransactionConflictError,
@@ -71,6 +71,23 @@ export class ProcessWagerTransaction {
       }
       throw error;
     }
+  }
+
+  /**
+   * Usado quando o consumidor desiste de uma mensagem (tentativas esgotadas): grava a transação
+   * como FAILED, sem mexer no saldo, para ficar auditável. Se ela já existir, devolve o replay.
+   */
+  async recordFailure(command: SubmitWagerCommand): Promise<WagerResult> {
+    const candidate = this.candidate(command);
+    return this.uow.run(async ({ transactions }) => {
+      const existing = await transactions.findByIdempotencyKey(command.idempotencyKey);
+      if (existing) {
+        return replay(existing, candidate);
+      }
+      candidate.fail(FailureCode.ProcessingFailed, this.clock.now());
+      transactions.add(candidate);
+      return toResult(candidate, false);
+    });
   }
 
   private candidate(command: SubmitWagerCommand): WagerTransaction {

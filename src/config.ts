@@ -15,7 +15,7 @@ const schema = z.object({
   PENDING_REFERENCE_BATCH_SIZE: z.coerce.number().int().positive().default(50),
   OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   OUTBOX_BATCH_SIZE: z.coerce.number().int().positive().default(50),
-  SQS_PUBLISH_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+  SQS_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
   AWS_REGION: z.string().min(1).default('us-east-1'),
   AWS_ENDPOINT_URL: z.string().min(1).default('http://localhost:4566'),
   AWS_ACCESS_KEY_ID: z.string().min(1).default('test'),
@@ -23,6 +23,12 @@ const schema = z.object({
   SQS_WAGER_QUEUE: z.string().min(1).default('wager-transactions.fifo'),
   SQS_WAGER_DLQ: z.string().min(1).default('wager-transactions-dlq.fifo'),
   SQS_EVENTS_QUEUE: z.string().min(1).default('wallet-events.fifo'),
+  SQS_CONSUMER_BATCH_SIZE: z.coerce.number().int().min(1).max(10).default(10),
+  SQS_CONSUMER_WAIT_SECONDS: z.coerce.number().int().min(0).max(20).default(10),
+  /** tentativas antes da DLQ; não deve passar do maxReceiveCount do redrive da fila */
+  SQS_CONSUMER_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
+  SQS_CONSUMER_RETRY_BASE_MS: z.coerce.number().int().positive().default(2_000),
+  SQS_CONSUMER_RETRY_MAX_MS: z.coerce.number().int().positive().default(60_000),
 });
 
 export type AppConfig = z.infer<typeof schema>;

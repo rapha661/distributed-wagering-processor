@@ -12,6 +12,7 @@ import { BackoffPolicy } from './domain/shared/backoff-policy';
 import { WageringController } from './http/wagering.controller';
 import { WalletsController } from './http/wallets.controller';
 import { SqsEventPublisher } from './infrastructure/messaging/sqs-event-publisher';
+import { SqsWagerConsumer } from './infrastructure/messaging/sqs-wager-consumer';
 import { MikroOrmWageringQueries } from './infrastructure/persistence/mikro-orm-queries';
 import { MikroOrmUnitOfWork } from './infrastructure/persistence/mikro-orm-unit-of-work';
 import { systemClock, uuidV7Generator } from './infrastructure/system';
@@ -51,7 +52,7 @@ export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
       useFactory: (uow: UnitOfWork, sqs: SQSClient, config: AppConfig) =>
         new PublishOutbox(
           uow,
-          new SqsEventPublisher(sqs, config.SQS_EVENTS_QUEUE, config.SQS_PUBLISH_TIMEOUT_MS),
+          new SqsEventPublisher(sqs, config.SQS_EVENTS_QUEUE, config.SQS_REQUEST_TIMEOUT_MS),
           systemClock,
           config.OUTBOX_BATCH_SIZE,
         ),
@@ -61,6 +62,29 @@ export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
       inject: [UNIT_OF_WORK, REFERENCE_RETRY_POLICY],
       useFactory: (uow: UnitOfWork, retry: BackoffPolicy) =>
         new ReprocessPendingReferences(uow, systemClock, uuidV7Generator, retry),
+    },
+    {
+      provide: SqsWagerConsumer,
+      inject: [SQSClient, ProcessWagerTransaction, APP_CONFIG],
+      useFactory: (sqs: SQSClient, processWager: ProcessWagerTransaction, config: AppConfig) =>
+        new SqsWagerConsumer(
+          sqs,
+          processWager,
+          systemClock,
+          {
+            queueName: config.SQS_WAGER_QUEUE,
+            deadLetterQueueName: config.SQS_WAGER_DLQ,
+            retry: new BackoffPolicy(
+              config.SQS_CONSUMER_RETRY_BASE_MS,
+              config.SQS_CONSUMER_RETRY_MAX_MS,
+              config.SQS_CONSUMER_MAX_ATTEMPTS,
+            ),
+            batchSize: config.SQS_CONSUMER_BATCH_SIZE,
+            waitTimeSeconds: config.SQS_CONSUMER_WAIT_SECONDS,
+            requestTimeoutMs: config.SQS_REQUEST_TIMEOUT_MS,
+          },
+          new Logger('WagerConsumer'),
+        ),
     },
     BackgroundWorkers,
     {
