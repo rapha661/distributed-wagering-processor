@@ -29,6 +29,8 @@ const schema = z.object({
   SQS_CONSUMER_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
   SQS_CONSUMER_RETRY_BASE_MS: z.coerce.number().int().positive().default(2_000),
   SQS_CONSUMER_RETRY_MAX_MS: z.coerce.number().int().positive().default(60_000),
+  /** só para testes de queda com processos reais */
+  FAULT_INJECTION: z.enum(['crash-after-commit']).optional(),
 });
 
 export type AppConfig = z.infer<typeof schema>;

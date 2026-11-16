@@ -18,6 +18,7 @@ import type { BackoffPolicy } from '../../domain/shared/backoff-policy';
 import { canonicalJson } from '../../domain/shared/canonical-json';
 import { DomainError } from '../../domain/shared/errors';
 import { idempotencyKeyHeader, parse, RequestValidationError, submitWagerBody } from '../../http/request-schemas';
+import { FaultInjector } from '../fault-injection';
 
 export const WAGER_CONSUMER_NAME = 'wager-transactions-consumer';
 
@@ -74,6 +75,7 @@ export class SqsWagerConsumer {
     private readonly clock: Clock,
     private readonly options: WagerConsumerOptions,
     private readonly logger: ConsumerLogger,
+    private readonly faults = new FaultInjector(undefined),
   ) {}
 
   start(): void {
@@ -161,6 +163,7 @@ export class SqsWagerConsumer {
       }
       return this.retryLater(queueUrl, message, error, attempt);
     }
+    this.faults.reach('crash-after-commit');
     await this.ack(queueUrl, message);
   }
 

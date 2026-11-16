@@ -12,6 +12,7 @@ import { BackoffPolicy } from './domain/shared/backoff-policy';
 import { WageringController } from './http/wagering.controller';
 import { WalletsController } from './http/wallets.controller';
 import { SqsEventPublisher } from './infrastructure/messaging/sqs-event-publisher';
+import { FaultInjector } from './infrastructure/fault-injection';
 import { SqsWagerConsumer } from './infrastructure/messaging/sqs-wager-consumer';
 import { MikroOrmWageringQueries } from './infrastructure/persistence/mikro-orm-queries';
 import { MikroOrmUnitOfWork } from './infrastructure/persistence/mikro-orm-unit-of-work';
@@ -84,6 +85,7 @@ export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
             requestTimeoutMs: config.SQS_REQUEST_TIMEOUT_MS,
           },
           new Logger('WagerConsumer'),
+          new FaultInjector(config.FAULT_INJECTION),
         ),
     },
     BackgroundWorkers,
