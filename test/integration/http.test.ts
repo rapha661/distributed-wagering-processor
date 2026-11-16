@@ -59,6 +59,8 @@ beforeAll(async () => {
   ctx = await createTestContext();
   process.env.DATABASE_URL = TEST_DATABASE_URL;
   process.env.DATABASE_LOCK_TIMEOUT_MS = '300';
+  // sem workers: estes testes cobrem só a API
+  process.env.APP_ROLE = 'api';
   app = await NestFactory.create(AppModule, { logger: false });
   await app.listen(0, '127.0.0.1');
   baseUrl = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;

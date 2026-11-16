@@ -1,16 +1,21 @@
 import { Logger, Module } from '@nestjs/common';
 import { MikroORM } from '@mikro-orm/postgresql';
+import { SQSClient } from '@aws-sdk/client-sqs';
 import { CreateWallet } from './application/create-wallet';
 import { ProcessWagerTransaction } from './application/process-wager-transaction';
 import type { UnitOfWork } from './application/ports';
+import { PublishOutbox } from './application/publish-outbox';
+import { ReprocessPendingReferences } from './application/reprocess-pending-references';
 import { WalletQueries } from './application/wallet-queries';
 import { APP_CONFIG, type AppConfig } from './config';
 import { BackoffPolicy } from './domain/shared/backoff-policy';
 import { WageringController } from './http/wagering.controller';
 import { WalletsController } from './http/wallets.controller';
+import { SqsEventPublisher } from './infrastructure/messaging/sqs-event-publisher';
 import { MikroOrmWageringQueries } from './infrastructure/persistence/mikro-orm-queries';
 import { MikroOrmUnitOfWork } from './infrastructure/persistence/mikro-orm-unit-of-work';
 import { systemClock, uuidV7Generator } from './infrastructure/system';
+import { BackgroundWorkers } from './infrastructure/workers/background-workers';
 
 export const UNIT_OF_WORK = Symbol('UNIT_OF_WORK');
 export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
@@ -40,6 +45,24 @@ export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
       inject: [UNIT_OF_WORK],
       useFactory: (uow: UnitOfWork) => new CreateWallet(uow, systemClock, uuidV7Generator),
     },
+    {
+      provide: PublishOutbox,
+      inject: [UNIT_OF_WORK, SQSClient, APP_CONFIG],
+      useFactory: (uow: UnitOfWork, sqs: SQSClient, config: AppConfig) =>
+        new PublishOutbox(
+          uow,
+          new SqsEventPublisher(sqs, config.SQS_EVENTS_QUEUE, config.SQS_PUBLISH_TIMEOUT_MS),
+          systemClock,
+          config.OUTBOX_BATCH_SIZE,
+        ),
+    },
+    {
+      provide: ReprocessPendingReferences,
+      inject: [UNIT_OF_WORK, REFERENCE_RETRY_POLICY],
+      useFactory: (uow: UnitOfWork, retry: BackoffPolicy) =>
+        new ReprocessPendingReferences(uow, systemClock, uuidV7Generator, retry),
+    },
+    BackgroundWorkers,
     {
       provide: WalletQueries,
       inject: [MikroORM],
