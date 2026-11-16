@@ -6,6 +6,7 @@ import {
   WagerTransaction,
 } from '../../src/domain/wagering/wager-transaction';
 import { WagerTransactionKind } from '../../src/domain/wagering/wager-types';
+import type { EventContext } from '../../src/domain/events/integration-event';
 
 export const NOW = new Date('2026-07-29T15:00:00.000Z');
 export const PLAYER_ID = '0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1';
@@ -50,4 +51,8 @@ export function aTransaction(
     createdAt: NOW,
     ...overrides,
   });
+}
+
+export function eventContext(overrides: Partial<EventContext> = {}): EventContext {
+  return { eventId: newId(), correlationId: 'corr-1', occurredAt: NOW, ...overrides };
 }
