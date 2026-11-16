@@ -1,6 +1,7 @@
 import { defineConfig } from '@mikro-orm/postgresql';
 import { Migrator } from '@mikro-orm/migrations';
 import type { AppConfig } from '../../config';
+import { Migration20261116120000InitialSchema } from './migrations/Migration20261116120000InitialSchema';
 
 export function createOrmConfig(config: Pick<AppConfig, 'DATABASE_URL' | 'DATABASE_POOL_MAX'>) {
   return defineConfig({
@@ -11,7 +12,9 @@ export function createOrmConfig(config: Pick<AppConfig, 'DATABASE_URL' | 'DATABA
     extensions: [Migrator],
     migrations: {
       tableName: 'schema_migrations',
-      migrationsList: [],
+      migrationsList: [
+        { name: 'Migration20261116120000_initial_schema', class: Migration20261116120000InitialSchema },
+      ],
       transactional: true,
       allOrNothing: true,
       snapshot: false,
