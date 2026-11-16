@@ -1,4 +1,4 @@
-import { type ArgumentsHost, Catch, type ExceptionFilter, HttpException, Logger } from '@nestjs/common';
+import { type ArgumentsHost, Catch, type ExceptionFilter, HttpException, Inject } from '@nestjs/common';
 import type { Response } from 'express';
 import {
   ExternalTransactionConflictError,
@@ -12,6 +12,7 @@ import {
 import { InvalidMoneyError } from '../domain/money/money';
 import { DomainError } from '../domain/shared/errors';
 import { InvalidWagerTransactionError } from '../domain/wagering/wager-transaction';
+import { type AppLogger, LOGGER } from '../infrastructure/observability/logging';
 import { RequestValidationError } from './request-schemas';
 
 export interface ErrorBody {
@@ -67,13 +68,19 @@ export function toHttpError(error: unknown): HttpError {
 
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
-  private readonly logger = new Logger('Http');
+  private readonly logger: AppLogger;
+
+  constructor(@Inject(LOGGER) logger: AppLogger) {
+    this.logger = logger.child({ component: 'http' });
+  }
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const response = host.switchToHttp().getResponse<Response>();
     const { status, body, headers } = toHttpError(exception);
-    if (status >= 500) {
-      this.logger.error(exception instanceof Error ? exception.stack ?? exception.message : String(exception));
+    if (status === 503) {
+      this.logger.warn({ status, code: body.code }, 'transient failure');
+    } else if (status >= 500) {
+      this.logger.error({ status, code: body.code, err: exception }, 'unexpected error');
     }
     for (const [name, value] of Object.entries(headers ?? {})) {
       response.setHeader(name, value);

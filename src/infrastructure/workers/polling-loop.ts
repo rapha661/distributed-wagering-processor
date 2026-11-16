@@ -1,5 +1,5 @@
 export interface LoopLogger {
-  error(message: string): void;
+  error(fields: Record<string, unknown>, message: string): void;
 }
 
 /**
@@ -38,7 +38,7 @@ export class PollingLoop {
       try {
         didWork = await this.tick();
       } catch (error) {
-        this.logger.error(`${this.name} failed: ${error instanceof Error ? error.message : String(error)}`);
+        this.logger.error({ worker: this.name, err: error }, 'background worker failed');
       }
       if (!didWork && this.running) {
         await this.sleep(this.idleMs);

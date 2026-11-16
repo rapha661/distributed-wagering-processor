@@ -12,6 +12,8 @@ export interface Instance {
   url: string;
   exited: Promise<number>;
   output(): string;
+  /** Linhas de log JSON emitidas pelo processo. */
+  logs(): Record<string, any>[];
   /** SIGKILL: queda abrupta, sem shutdown. */
   kill(): Promise<void>;
   /** SIGTERM: desligamento gracioso (no Windows não há sinal, e vira queda abrupta). */
@@ -77,6 +79,12 @@ export async function startInstance(name: string, env: Record<string, string>): 
     url: `http://127.0.0.1:${port}`,
     exited: child.exited,
     output: () => chunks.join(''),
+    logs: () =>
+      chunks
+        .join('')
+        .split('\n')
+        .filter((line) => line.startsWith('{'))
+        .map((line) => JSON.parse(line)),
     kill: async () => {
       child.kill('SIGKILL');
       await child.exited;

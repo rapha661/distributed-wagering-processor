@@ -8,6 +8,7 @@ import { settlementEvents } from './settlement-events';
 
 export interface ReprocessResult {
   transactionId: string;
+  walletId: string;
   status: WagerTransactionStatus;
 }
 
@@ -71,7 +72,7 @@ export class ReprocessPendingReferences {
       for (const event of settlementEvents(transaction, wallet, outcome, context, { announcePending: false })) {
         outbox.add(OutboxMessage.enqueue(event));
       }
-      return { transactionId: transaction.id, status: transaction.status };
+      return { transactionId: transaction.id, walletId: transaction.walletId, status: transaction.status };
     });
   }
 }

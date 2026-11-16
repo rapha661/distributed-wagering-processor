@@ -11,7 +11,7 @@ import {
 } from '@aws-sdk/client-sqs';
 import { z } from 'zod';
 import { ApplicationError, TransientFailureError } from '../../application/errors';
-import type { ProcessWagerTransaction, SubmitWagerCommand } from '../../application/process-wager-transaction';
+import type { ProcessWagerTransaction, SubmitWagerCommand, WagerResult } from '../../application/process-wager-transaction';
 import type { Clock } from '../../application/ports';
 import type { ReceiveInboxProps } from '../../domain/messaging/inbox-message';
 import type { BackoffPolicy } from '../../domain/shared/backoff-policy';
@@ -19,6 +19,7 @@ import { canonicalJson } from '../../domain/shared/canonical-json';
 import { DomainError } from '../../domain/shared/errors';
 import { idempotencyKeyHeader, parse, RequestValidationError, submitWagerBody } from '../../http/request-schemas';
 import { FaultInjector } from '../fault-injection';
+import { type AppLogger, withLogContext } from '../observability/logging';
 
 export const WAGER_CONSUMER_NAME = 'wager-transactions-consumer';
 
@@ -37,12 +38,6 @@ export interface WagerConsumerOptions {
   batchSize: number;
   waitTimeSeconds: number;
   requestTimeoutMs: number;
-}
-
-export interface ConsumerLogger {
-  log(message: string): void;
-  warn(message: string): void;
-  error(message: string): void;
 }
 
 interface Decoded {
@@ -68,15 +63,18 @@ export class SqsWagerConsumer {
   private stopping = new AbortController();
   private loop: Promise<void> | undefined;
   private readonly queueUrls = new Map<string, string>();
+  private readonly logger: AppLogger;
 
   constructor(
     private readonly sqs: SQSClient,
     private readonly processWager: ProcessWagerTransaction,
     private readonly clock: Clock,
     private readonly options: WagerConsumerOptions,
-    private readonly logger: ConsumerLogger,
+    logger: AppLogger,
     private readonly faults = new FaultInjector(undefined),
-  ) {}
+  ) {
+    this.logger = logger.child({ component: 'wager-consumer' });
+  }
 
   start(): void {
     if (this.loop) {
@@ -95,7 +93,7 @@ export class SqsWagerConsumer {
     if (this.loop) {
       await this.loop;
       this.loop = undefined;
-      this.logger.log('wager consumer stopped');
+      this.logger.info('wager consumer stopped');
     }
   }
 
@@ -125,7 +123,7 @@ export class SqsWagerConsumer {
         await this.handle(queueUrl, message);
       } catch (error) {
         // sem ack: a mensagem volta quando o visibility timeout vencer
-        this.logger.error(`message ${message.MessageId} not handled: ${describe(error)}`);
+        this.logger.error({ sqsMessageId: message.MessageId, err: error }, 'wager message not handled');
       }
     }
     return messages.length;
@@ -136,7 +134,7 @@ export class SqsWagerConsumer {
       try {
         await this.poll();
       } catch (error) {
-        this.logger.error(`wager consumer failed: ${describe(error)}`);
+        this.logger.error({ err: error }, 'wager consumer poll failed');
         await pause(1_000, this.stopping.signal);
       }
     }
@@ -151,18 +149,40 @@ export class SqsWagerConsumer {
       return this.deadLetter(queueUrl, message, error, attempt);
     }
 
+    const { command } = decoded;
+    const fields = {
+      correlationId: command.correlationId,
+      messageId: decoded.delivery.messageId,
+      walletId: command.request.walletId,
+      providerId: command.request.providerId,
+    };
+    return withLogContext(fields, () => this.settle(queueUrl, message, decoded, attempt));
+  }
+
+  private async settle(queueUrl: string, message: Message, { command, delivery }: Decoded, attempt: number): Promise<void> {
+    let result: WagerResult;
     try {
-      const result = await this.processWager.execute(decoded.command, decoded.delivery);
-      this.logger.log(`message ${decoded.delivery.messageId}: ${result.status}${result.idempotentReplay ? ' (replay)' : ''}`);
+      result = await this.processWager.execute(command, delivery);
     } catch (error) {
       if (isPermanent(error)) {
         return this.deadLetter(queueUrl, message, error, attempt);
       }
       if (this.options.retry.isExhausted(attempt)) {
-        return this.giveUp(queueUrl, message, decoded.command, error, attempt);
+        return this.giveUp(queueUrl, message, command, error, attempt);
       }
       return this.retryLater(queueUrl, message, error, attempt);
     }
+    this.logger.info(
+      {
+        transactionId: result.transactionId,
+        kind: command.request.kind,
+        status: result.status,
+        failureCode: result.failureCode ?? undefined,
+        idempotentReplay: result.idempotentReplay,
+        attempt,
+      },
+      'wager message processed',
+    );
     this.faults.reach('crash-after-commit');
     await this.ack(queueUrl, message);
   }
@@ -199,13 +219,16 @@ export class SqsWagerConsumer {
       });
     } catch (error) {
       // o efeito já foi commitado; a redelivery vai cair no inbox
-      this.logger.warn(`ack of message ${message.MessageId} failed: ${describe(error)}`);
+      this.logger.warn({ sqsMessageId: message.MessageId, err: error }, 'ack failed');
     }
   }
 
   private async retryLater(queueUrl: string, message: Message, error: unknown, attempt: number): Promise<void> {
     const delaySeconds = Math.ceil(this.options.retry.delayMs(attempt) / 1_000);
-    this.logger.warn(`message ${message.MessageId} failed (attempt ${attempt}), retry in ${delaySeconds}s: ${describe(error)}`);
+    this.logger.warn(
+      { sqsMessageId: message.MessageId, attempt, retryInSeconds: delaySeconds, code: codeOf(error), error: describe(error) },
+      'wager message failed, retry scheduled',
+    );
     try {
       await this.sqs.send(
         new ChangeMessageVisibilityCommand({ QueueUrl: queueUrl, ReceiptHandle: message.ReceiptHandle, VisibilityTimeout: delaySeconds }),
@@ -230,8 +253,9 @@ export class SqsWagerConsumer {
         // outra entrega já resolveu a transação
         return this.ack(queueUrl, message);
       }
+      this.logger.warn({ transactionId: result.transactionId, attempt }, 'retries exhausted, transaction recorded as FAILED');
     } catch (recordError) {
-      this.logger.warn(`could not record FAILED for message ${message.MessageId}: ${describe(recordError)}`);
+      this.logger.warn({ sqsMessageId: message.MessageId, err: recordError }, 'could not record FAILED');
     }
     return this.deadLetter(queueUrl, message, error, attempt);
   }
@@ -253,7 +277,10 @@ export class SqsWagerConsumer {
       { abortSignal: AbortSignal.timeout(this.options.requestTimeoutMs) },
     );
     await this.ack(queueUrl, message);
-    this.logger.warn(`message ${message.MessageId} moved to ${this.options.deadLetterQueueName}: ${codeOf(error)}`);
+    this.logger.warn(
+      { sqsMessageId: message.MessageId, attempt, code: codeOf(error), error: describe(error) },
+      'wager message moved to the dead-letter queue',
+    );
   }
 
   private async release(queueUrl: string, messages: Message[]): Promise<void> {
@@ -269,9 +296,9 @@ export class SqsWagerConsumer {
         }),
         { abortSignal: AbortSignal.timeout(this.options.requestTimeoutMs) },
       );
-      this.logger.log(`released ${messages.length} unprocessed messages back to the queue`);
+      this.logger.info({ count: messages.length }, 'released unprocessed messages back to the queue');
     } catch (error) {
-      this.logger.warn(`could not release ${messages.length} messages: ${describe(error)}`);
+      this.logger.warn({ count: messages.length, err: error }, 'could not release messages');
     }
   }
 

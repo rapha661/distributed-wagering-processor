@@ -4,6 +4,7 @@ const schema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   /** api: só HTTP · worker: HTTP de health + workers · all: tudo (padrão local) */
   APP_ROLE: z.enum(['api', 'worker', 'all']).default('all'),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   DATABASE_URL: z.string().min(1).default('postgres://wagering:wagering@localhost:5432/wagering'),
   DATABASE_POOL_MAX: z.coerce.number().int().positive().default(20),
   DATABASE_LOCK_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),

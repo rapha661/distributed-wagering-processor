@@ -15,6 +15,7 @@ import {
   WAGER_CONSUMER_NAME,
   type WagerConsumerOptions,
 } from '../../src/infrastructure/messaging/sqs-wager-consumer';
+import { createLogger } from '../../src/infrastructure/observability/logging';
 import { systemClock } from '../../src/infrastructure/system';
 import {
   bet,
@@ -34,7 +35,7 @@ let source: TestQueue;
 let deadLetter: TestQueue;
 const touched = new Set<string>();
 const cleanup: (() => Promise<void>)[] = [];
-const silent = { log() {}, warn() {}, error() {} };
+const silent = createLogger('silent');
 
 beforeAll(async () => {
   ctx = await createTestContext();

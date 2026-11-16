@@ -80,7 +80,18 @@ describe('queda e recuperação com processos reais', () => {
       'redelivery and outbox',
     );
 
-    expect(survivor.output()).toContain(`${message.messageId}: PROCESSED (replay)`);
+    // a redelivery é registrada no log com os ids de correlação e sem valores
+    const redelivery = survivor.logs().find((line) => line.msg === 'wager message processed' && line.messageId === message.messageId);
+    expect(redelivery).toMatchObject({
+      level: 'info',
+      correlationId: message.messageId,
+      transactionId: expect.any(String),
+      walletId: wallet.id,
+      providerId: 'provider-a',
+      status: 'PROCESSED',
+      idempotentReplay: true,
+    });
+    expect(survivor.output()).not.toContain('"amount"');
     expect(await balanceOf(wallet.id)).toBe('75.00');
     expect(await countWhere('wager_transactions where idempotency_key = ?', [key])).toBe(1);
     expect(await countWhere('wallet_ledger_entries where wallet_id = ?', [wallet.id])).toBe(2);

@@ -59,6 +59,7 @@ beforeAll(async () => {
   ctx = await createTestContext();
   process.env.DATABASE_URL = TEST_DATABASE_URL;
   process.env.DATABASE_LOCK_TIMEOUT_MS = '300';
+  process.env.LOG_LEVEL = 'silent';
   // sem workers: estes testes cobrem só a API
   process.env.APP_ROLE = 'api';
   app = await NestFactory.create(AppModule, { logger: false });

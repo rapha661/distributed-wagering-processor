@@ -4,6 +4,7 @@ import { InvalidRequestError } from '../application/errors';
 import { ProcessWagerTransaction, type WagerResult } from '../application/process-wager-transaction';
 import { WalletQueries } from '../application/wallet-queries';
 import { WagerTransactionStatus } from '../domain/wagering/wager-types';
+import { type AppLogger, LOGGER } from '../infrastructure/observability/logging';
 import { correlationIdOf } from './correlation-id.middleware';
 import { ProviderAuthGuard } from './provider-auth.guard';
 import { idempotencyKeyHeader, parse, submitWagerBody, textParam, uuidParam } from './request-schemas';
@@ -23,10 +24,15 @@ const STATUS_CODE: Record<WagerTransactionStatus, number> = {
 @Controller()
 @UseGuards(ProviderAuthGuard)
 export class WageringController {
+  private readonly logger: AppLogger;
+
   constructor(
     @Inject(ProcessWagerTransaction) private readonly processWager: ProcessWagerTransaction,
     @Inject(WalletQueries) private readonly queries: WalletQueries,
-  ) {}
+    @Inject(LOGGER) logger: AppLogger,
+  ) {
+    this.logger = logger.child({ component: 'http' });
+  }
 
   @Post('wagering/transactions')
   async submit(
@@ -37,11 +43,24 @@ export class WageringController {
     if (idempotencyKey === undefined) {
       throw new InvalidRequestError('IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key header is required');
     }
+    const request = parse(submitWagerBody, body);
     const result = await this.processWager.execute({
       idempotencyKey: parse(idempotencyKeyHeader, idempotencyKey, 'INVALID_IDEMPOTENCY_KEY'),
-      request: parse(submitWagerBody, body),
+      request,
       correlationId: correlationIdOf(response),
     });
+    this.logger.info(
+      {
+        transactionId: result.transactionId,
+        walletId: request.walletId,
+        providerId: request.providerId,
+        kind: request.kind,
+        status: result.status,
+        failureCode: result.failureCode ?? undefined,
+        idempotentReplay: result.idempotentReplay,
+      },
+      'wager transaction submitted',
+    );
     response.status(STATUS_CODE[result.status]);
     return toResponse(result);
   }

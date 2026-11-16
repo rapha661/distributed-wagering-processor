@@ -1,8 +1,10 @@
-import { type BeforeApplicationShutdown, Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
+import { type BeforeApplicationShutdown, Inject, Injectable, type OnApplicationBootstrap } from '@nestjs/common';
 import { PublishOutbox } from '../../application/publish-outbox';
 import { ReprocessPendingReferences } from '../../application/reprocess-pending-references';
 import { APP_CONFIG, type AppConfig } from '../../config';
+import { WagerTransactionStatus } from '../../domain/wagering/wager-types';
 import { SqsWagerConsumer } from '../messaging/sqs-wager-consumer';
+import { type AppLogger, LOGGER } from '../observability/logging';
 import { PollingLoop } from './polling-loop';
 
 interface Worker {
@@ -17,26 +19,23 @@ interface Worker {
  */
 @Injectable()
 export class BackgroundWorkers implements OnApplicationBootstrap, BeforeApplicationShutdown {
-  private readonly logger = new Logger('Workers');
+  private readonly logger: AppLogger;
   private readonly loops: Worker[];
 
   constructor(
     @Inject(APP_CONFIG) private readonly config: AppConfig,
-    @Inject(PublishOutbox) publishOutbox: PublishOutbox,
-    @Inject(ReprocessPendingReferences) reprocess: ReprocessPendingReferences,
+    @Inject(PublishOutbox) private readonly publishOutbox: PublishOutbox,
+    @Inject(ReprocessPendingReferences) private readonly reprocess: ReprocessPendingReferences,
     @Inject(SqsWagerConsumer) consumer: SqsWagerConsumer,
+    @Inject(LOGGER) logger: AppLogger,
   ) {
+    this.logger = logger.child({ component: 'workers' });
     this.loops = [
       consumer,
-      new PollingLoop(
-        'outbox-publisher',
-        async () => (await publishOutbox.publishBatch()).published > 0,
-        config.OUTBOX_POLL_INTERVAL_MS,
-        this.logger,
-      ),
+      new PollingLoop('outbox-publisher', () => this.publishOutboxBatch(), config.OUTBOX_POLL_INTERVAL_MS, this.logger),
       new PollingLoop(
         'pending-reference-worker',
-        async () => (await reprocess.processDue(config.PENDING_REFERENCE_BATCH_SIZE)).length > 0,
+        () => this.reprocessPendingReferences(),
         config.PENDING_REFERENCE_POLL_INTERVAL_MS,
         this.logger,
       ),
@@ -50,10 +49,28 @@ export class BackgroundWorkers implements OnApplicationBootstrap, BeforeApplicat
     for (const loop of this.loops) {
       loop.start();
     }
-    this.logger.log(`started ${this.loops.length} workers`);
+    this.logger.info({ workers: this.loops.length }, 'background workers started');
   }
 
   async beforeApplicationShutdown(): Promise<void> {
     await Promise.all(this.loops.map((loop) => loop.stop()));
+  }
+
+  private async publishOutboxBatch(): Promise<boolean> {
+    const { published, failed } = await this.publishOutbox.publishBatch();
+    if (failed > 0) {
+      this.logger.warn({ published, failed }, 'outbox publish failed, retry scheduled');
+    }
+    return published > 0;
+  }
+
+  private async reprocessPendingReferences(): Promise<boolean> {
+    const results = await this.reprocess.processDue(this.config.PENDING_REFERENCE_BATCH_SIZE);
+    for (const { transactionId, walletId, status } of results) {
+      if (status !== WagerTransactionStatus.PendingReference) {
+        this.logger.info({ transactionId, walletId, status }, 'pending transaction settled');
+      }
+    }
+    return results.length > 0;
   }
 }

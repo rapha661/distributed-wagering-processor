@@ -1,4 +1,4 @@
-import { Logger, Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { MikroORM } from '@mikro-orm/postgresql';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { CreateWallet } from './application/create-wallet';
@@ -14,6 +14,7 @@ import { WalletsController } from './http/wallets.controller';
 import { SqsEventPublisher } from './infrastructure/messaging/sqs-event-publisher';
 import { FaultInjector } from './infrastructure/fault-injection';
 import { SqsWagerConsumer } from './infrastructure/messaging/sqs-wager-consumer';
+import { type AppLogger, LOGGER } from './infrastructure/observability/logging';
 import { MikroOrmWageringQueries } from './infrastructure/persistence/mikro-orm-queries';
 import { MikroOrmUnitOfWork } from './infrastructure/persistence/mikro-orm-unit-of-work';
 import { systemClock, uuidV7Generator } from './infrastructure/system';
@@ -66,8 +67,8 @@ export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
     },
     {
       provide: SqsWagerConsumer,
-      inject: [SQSClient, ProcessWagerTransaction, APP_CONFIG],
-      useFactory: (sqs: SQSClient, processWager: ProcessWagerTransaction, config: AppConfig) =>
+      inject: [SQSClient, ProcessWagerTransaction, APP_CONFIG, LOGGER],
+      useFactory: (sqs: SQSClient, processWager: ProcessWagerTransaction, config: AppConfig, logger: AppLogger) =>
         new SqsWagerConsumer(
           sqs,
           processWager,
@@ -84,18 +85,20 @@ export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
             waitTimeSeconds: config.SQS_CONSUMER_WAIT_SECONDS,
             requestTimeoutMs: config.SQS_REQUEST_TIMEOUT_MS,
           },
-          new Logger('WagerConsumer'),
+          logger,
           new FaultInjector(config.FAULT_INJECTION),
         ),
     },
     BackgroundWorkers,
     {
       provide: WalletQueries,
-      inject: [MikroORM],
-      useFactory: (orm: MikroORM) => {
-        const logger = new Logger('Reconciliation');
+      inject: [MikroORM, LOGGER],
+      useFactory: (orm: MikroORM, logger: AppLogger) => {
         return new WalletQueries(new MikroOrmWageringQueries(orm), {
-          mismatch: (report) => logger.error(`wallet ${report.walletId} diverges from ledger by ${report.difference}`),
+          // divergência não é corrigida: é logada e sinalizada na resposta
+          mismatch: (report) => {
+            logger.error({ component: 'reconciliation', ...report }, 'wallet balance diverges from ledger');
+          },
         });
       },
     },
