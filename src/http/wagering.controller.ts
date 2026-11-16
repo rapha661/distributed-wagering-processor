@@ -5,6 +5,7 @@ import { ProcessWagerTransaction, type WagerResult } from '../application/proces
 import { WalletQueries } from '../application/wallet-queries';
 import { WagerTransactionStatus } from '../domain/wagering/wager-types';
 import { type AppLogger, LOGGER } from '../infrastructure/observability/logging';
+import { Metrics } from '../infrastructure/observability/metrics';
 import { correlationIdOf } from './correlation-id.middleware';
 import { ProviderAuthGuard } from './provider-auth.guard';
 import { idempotencyKeyHeader, parse, submitWagerBody, textParam, uuidParam } from './request-schemas';
@@ -29,6 +30,7 @@ export class WageringController {
   constructor(
     @Inject(ProcessWagerTransaction) private readonly processWager: ProcessWagerTransaction,
     @Inject(WalletQueries) private readonly queries: WalletQueries,
+    @Inject(Metrics) private readonly metrics: Metrics,
     @Inject(LOGGER) logger: AppLogger,
   ) {
     this.logger = logger.child({ component: 'http' });
@@ -44,11 +46,13 @@ export class WageringController {
       throw new InvalidRequestError('IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key header is required');
     }
     const request = parse(submitWagerBody, body);
+    const startedAt = performance.now();
     const result = await this.processWager.execute({
       idempotencyKey: parse(idempotencyKeyHeader, idempotencyKey, 'INVALID_IDEMPOTENCY_KEY'),
       request,
       correlationId: correlationIdOf(response),
     });
+    this.metrics.recordSettlement('http', result, (performance.now() - startedAt) / 1_000);
     this.logger.info(
       {
         transactionId: result.transactionId,

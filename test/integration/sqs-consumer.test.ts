@@ -16,6 +16,7 @@ import {
   type WagerConsumerOptions,
 } from '../../src/infrastructure/messaging/sqs-wager-consumer';
 import { createLogger } from '../../src/infrastructure/observability/logging';
+import { Metrics } from '../../src/infrastructure/observability/metrics';
 import { systemClock } from '../../src/infrastructure/system';
 import {
   bet,
@@ -107,6 +108,7 @@ function consumer(
       ...overrides,
     },
     silent,
+    new Metrics(),
   );
 }
 

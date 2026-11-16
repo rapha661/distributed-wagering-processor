@@ -15,6 +15,7 @@ import { SqsEventPublisher } from './infrastructure/messaging/sqs-event-publishe
 import { FaultInjector } from './infrastructure/fault-injection';
 import { SqsWagerConsumer } from './infrastructure/messaging/sqs-wager-consumer';
 import { type AppLogger, LOGGER } from './infrastructure/observability/logging';
+import { Metrics } from './infrastructure/observability/metrics';
 import { MikroOrmWageringQueries } from './infrastructure/persistence/mikro-orm-queries';
 import { MikroOrmUnitOfWork } from './infrastructure/persistence/mikro-orm-unit-of-work';
 import { systemClock, uuidV7Generator } from './infrastructure/system';
@@ -28,8 +29,9 @@ export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
   providers: [
     {
       provide: UNIT_OF_WORK,
-      inject: [MikroORM, APP_CONFIG],
-      useFactory: (orm: MikroORM, config: AppConfig) => new MikroOrmUnitOfWork(orm, config.DATABASE_LOCK_TIMEOUT_MS),
+      inject: [MikroORM, APP_CONFIG, Metrics],
+      useFactory: (orm: MikroORM, config: AppConfig, metrics: Metrics) =>
+        new MikroOrmUnitOfWork(orm, config.DATABASE_LOCK_TIMEOUT_MS, () => metrics.lockConflicts.inc()),
     },
     {
       provide: REFERENCE_RETRY_POLICY,
@@ -67,8 +69,8 @@ export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
     },
     {
       provide: SqsWagerConsumer,
-      inject: [SQSClient, ProcessWagerTransaction, APP_CONFIG, LOGGER],
-      useFactory: (sqs: SQSClient, processWager: ProcessWagerTransaction, config: AppConfig, logger: AppLogger) =>
+      inject: [SQSClient, ProcessWagerTransaction, APP_CONFIG, LOGGER, Metrics],
+      useFactory: (sqs: SQSClient, processWager: ProcessWagerTransaction, config: AppConfig, logger: AppLogger, metrics: Metrics) =>
         new SqsWagerConsumer(
           sqs,
           processWager,
@@ -86,17 +88,19 @@ export const REFERENCE_RETRY_POLICY = Symbol('REFERENCE_RETRY_POLICY');
             requestTimeoutMs: config.SQS_REQUEST_TIMEOUT_MS,
           },
           logger,
+          metrics,
           new FaultInjector(config.FAULT_INJECTION),
         ),
     },
     BackgroundWorkers,
     {
       provide: WalletQueries,
-      inject: [MikroORM, LOGGER],
-      useFactory: (orm: MikroORM, logger: AppLogger) => {
+      inject: [MikroORM, LOGGER, Metrics],
+      useFactory: (orm: MikroORM, logger: AppLogger, metrics: Metrics) => {
         return new WalletQueries(new MikroOrmWageringQueries(orm), {
-          // divergência não é corrigida: é logada e sinalizada na resposta
+          // divergência não é corrigida: é logada, contada e sinalizada na resposta
           mismatch: (report) => {
+            metrics.reconciliationMismatches.inc();
             logger.error({ component: 'reconciliation', ...report }, 'wallet balance diverges from ledger');
           },
         });

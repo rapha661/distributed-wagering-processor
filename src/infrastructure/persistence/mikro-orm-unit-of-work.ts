@@ -75,6 +75,7 @@ export class MikroOrmUnitOfWork implements UnitOfWork {
   constructor(
     private readonly orm: MikroORM,
     private readonly lockTimeoutMs: number,
+    private readonly onLockConflict: () => void = () => {},
   ) {}
 
   async run<T>(work: (repositories: TransactionalRepositories) => Promise<T>): Promise<T> {
@@ -91,7 +92,11 @@ export class MikroOrmUnitOfWork implements UnitOfWork {
         });
       });
     } catch (error) {
-      throw translatePersistenceError(error);
+      const translated = translatePersistenceError(error);
+      if (translated instanceof TransientFailureError && translated.code === 'LOCK_TIMEOUT') {
+        this.onLockConflict();
+      }
+      throw translated;
     }
   }
 }

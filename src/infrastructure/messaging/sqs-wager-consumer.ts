@@ -20,6 +20,7 @@ import { DomainError } from '../../domain/shared/errors';
 import { idempotencyKeyHeader, parse, RequestValidationError, submitWagerBody } from '../../http/request-schemas';
 import { FaultInjector } from '../fault-injection';
 import { type AppLogger, withLogContext } from '../observability/logging';
+import type { Metrics } from '../observability/metrics';
 
 export const WAGER_CONSUMER_NAME = 'wager-transactions-consumer';
 
@@ -71,6 +72,7 @@ export class SqsWagerConsumer {
     private readonly clock: Clock,
     private readonly options: WagerConsumerOptions,
     logger: AppLogger,
+    private readonly metrics: Metrics,
     private readonly faults = new FaultInjector(undefined),
   ) {
     this.logger = logger.child({ component: 'wager-consumer' });
@@ -160,6 +162,7 @@ export class SqsWagerConsumer {
   }
 
   private async settle(queueUrl: string, message: Message, { command, delivery }: Decoded, attempt: number): Promise<void> {
+    const startedAt = performance.now();
     let result: WagerResult;
     try {
       result = await this.processWager.execute(command, delivery);
@@ -172,6 +175,7 @@ export class SqsWagerConsumer {
       }
       return this.retryLater(queueUrl, message, error, attempt);
     }
+    this.metrics.recordSettlement('sqs', result, (performance.now() - startedAt) / 1_000);
     this.logger.info(
       {
         transactionId: result.transactionId,
@@ -225,6 +229,7 @@ export class SqsWagerConsumer {
 
   private async retryLater(queueUrl: string, message: Message, error: unknown, attempt: number): Promise<void> {
     const delaySeconds = Math.ceil(this.options.retry.delayMs(attempt) / 1_000);
+    this.metrics.retries.inc({ operation: 'sqs_message', reason: codeOf(error) });
     this.logger.warn(
       { sqsMessageId: message.MessageId, attempt, retryInSeconds: delaySeconds, code: codeOf(error), error: describe(error) },
       'wager message failed, retry scheduled',
@@ -253,6 +258,7 @@ export class SqsWagerConsumer {
         // outra entrega já resolveu a transação
         return this.ack(queueUrl, message);
       }
+      this.metrics.transactions.inc({ status: result.status, source: 'sqs' });
       this.logger.warn({ transactionId: result.transactionId, attempt }, 'retries exhausted, transaction recorded as FAILED');
     } catch (recordError) {
       this.logger.warn({ sqsMessageId: message.MessageId, err: recordError }, 'could not record FAILED');
@@ -277,6 +283,7 @@ export class SqsWagerConsumer {
       { abortSignal: AbortSignal.timeout(this.options.requestTimeoutMs) },
     );
     await this.ack(queueUrl, message);
+    this.metrics.deadLettered.inc({ code: codeOf(error) });
     this.logger.warn(
       { sqsMessageId: message.MessageId, attempt, code: codeOf(error), error: describe(error) },
       'wager message moved to the dead-letter queue',

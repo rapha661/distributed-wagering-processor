@@ -5,6 +5,7 @@ import { APP_CONFIG, type AppConfig } from '../../config';
 import { WagerTransactionStatus } from '../../domain/wagering/wager-types';
 import { SqsWagerConsumer } from '../messaging/sqs-wager-consumer';
 import { type AppLogger, LOGGER } from '../observability/logging';
+import { Metrics } from '../observability/metrics';
 import { PollingLoop } from './polling-loop';
 
 interface Worker {
@@ -27,6 +28,7 @@ export class BackgroundWorkers implements OnApplicationBootstrap, BeforeApplicat
     @Inject(PublishOutbox) private readonly publishOutbox: PublishOutbox,
     @Inject(ReprocessPendingReferences) private readonly reprocess: ReprocessPendingReferences,
     @Inject(SqsWagerConsumer) consumer: SqsWagerConsumer,
+    @Inject(Metrics) private readonly metrics: Metrics,
     @Inject(LOGGER) logger: AppLogger,
   ) {
     this.logger = logger.child({ component: 'workers' });
@@ -59,6 +61,7 @@ export class BackgroundWorkers implements OnApplicationBootstrap, BeforeApplicat
   private async publishOutboxBatch(): Promise<boolean> {
     const { published, failed } = await this.publishOutbox.publishBatch();
     if (failed > 0) {
+      this.metrics.retries.inc({ operation: 'outbox_publish', reason: 'publish_failed' }, failed);
       this.logger.warn({ published, failed }, 'outbox publish failed, retry scheduled');
     }
     return published > 0;
@@ -67,7 +70,10 @@ export class BackgroundWorkers implements OnApplicationBootstrap, BeforeApplicat
   private async reprocessPendingReferences(): Promise<boolean> {
     const results = await this.reprocess.processDue(this.config.PENDING_REFERENCE_BATCH_SIZE);
     for (const { transactionId, walletId, status } of results) {
-      if (status !== WagerTransactionStatus.PendingReference) {
+      if (status === WagerTransactionStatus.PendingReference) {
+        this.metrics.retries.inc({ operation: 'pending_reference', reason: 'reference_not_found' });
+      } else {
+        this.metrics.transactions.inc({ status, source: 'pending_reference' });
         this.logger.info({ transactionId, walletId, status }, 'pending transaction settled');
       }
     }
