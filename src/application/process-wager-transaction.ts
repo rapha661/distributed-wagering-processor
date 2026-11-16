@@ -1,15 +1,7 @@
 import { Money, type MoneyProps } from '../domain/money/money';
 import { OutboxMessage } from '../domain/messaging/outbox-message';
-import type { IntegrationEvent } from '../domain/events/integration-event';
-import {
-  WagerTransactionPendingReference,
-  WagerTransactionProcessed,
-  WagerTransactionRejected,
-  WalletBalanceChanged,
-} from '../domain/events/wagering-events';
 import type { BackoffPolicy } from '../domain/shared/backoff-policy';
-import type { Wallet } from '../domain/wallet/wallet';
-import { WagerSettlement, type SettlementOutcome } from '../domain/wagering/wager-settlement';
+import { WagerSettlement } from '../domain/wagering/wager-settlement';
 import { WagerTransaction } from '../domain/wagering/wager-transaction';
 import type { FailureCode, WagerTransactionKind, WagerTransactionStatus } from '../domain/wagering/wager-types';
 import {
@@ -19,6 +11,7 @@ import {
   WalletNotFoundError,
 } from './errors';
 import type { Clock, IdGenerator, UnitOfWork } from './ports';
+import { settlementEvents } from './settlement-events';
 
 export interface WagerRequestInput {
   providerId: string;
@@ -122,36 +115,17 @@ export class ProcessWagerTransaction {
         wallets.update(wallet);
         ledger.add(outcome.ledgerEntry);
       }
-      for (const event of this.eventsFor(candidate, wallet, outcome, command, now)) {
+      const context = () => ({
+        eventId: this.ids.next(),
+        correlationId: command.correlationId,
+        causationId: command.causationId,
+        occurredAt: now,
+      });
+      for (const event of settlementEvents(candidate, wallet, outcome, context, { announcePending: true })) {
         outbox.add(OutboxMessage.enqueue(event));
       }
       return toResult(candidate, false);
     });
-  }
-
-  private eventsFor(
-    transaction: WagerTransaction,
-    wallet: Wallet,
-    outcome: SettlementOutcome,
-    command: SubmitWagerCommand,
-    now: Date,
-  ): IntegrationEvent<unknown>[] {
-    const ctx = () => ({
-      eventId: this.ids.next(),
-      correlationId: command.correlationId,
-      causationId: command.causationId,
-      occurredAt: now,
-    });
-    switch (outcome.type) {
-      case 'processed':
-        return outcome.ledgerEntry
-          ? [WagerTransactionProcessed.from(transaction, ctx()), WalletBalanceChanged.from(wallet, outcome.ledgerEntry, ctx())]
-          : [WagerTransactionProcessed.from(transaction, ctx())];
-      case 'rejected':
-        return [WagerTransactionRejected.from(transaction, ctx())];
-      case 'pending_reference':
-        return [WagerTransactionPendingReference.from(transaction, ctx())];
-    }
   }
 }
 
