@@ -377,15 +377,21 @@ describe('shutdown', () => {
     expect(await queueDepth(sqs, source.url)).toEqual({ visible: 2, inFlight: 0 });
   });
 
-  it('parar durante o long polling não espera o fim da espera', async () => {
+  it('parar durante o long polling devolve o que chegar na espera, sem processar', async () => {
     await queues();
-    const subject = consumer({ waitTimeSeconds: 10 });
+    const w = await wallet('100.00');
+    const command = bet(w, '10.00');
+    const subject = consumer({ waitTimeSeconds: 2 });
     subject.start();
-    await Bun.sleep(200);
+    await Bun.sleep(300);
 
     const startedAt = Date.now();
-    await subject.stop();
+    const stopped = subject.stop();
+    await send(envelope(command), w.id);
+    await stopped;
 
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
+    expect(await transactionsOf(command.idempotencyKey)).toHaveLength(0);
+    expect(await queueDepth(sqs, source.url)).toEqual({ visible: 1, inFlight: 0 });
   });
 });

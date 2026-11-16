@@ -84,40 +84,35 @@ export class SqsWagerConsumer {
     this.loop = this.run();
   }
 
-  /** Para de receber, conclui a mensagem em andamento e devolve a visibilidade das demais. */
+  /**
+   * Para de receber, conclui a mensagem em andamento e devolve a visibilidade das demais.
+   * Pode esperar o long polling em curso (até `waitTimeSeconds`).
+   */
   async stop(): Promise<void> {
     this.stopping.abort();
-    await this.loop;
-    this.loop = undefined;
+    if (this.loop) {
+      await this.loop;
+      this.loop = undefined;
+      this.logger.log('wager consumer stopped');
+    }
   }
 
   /** Recebe um lote (long polling) e trata cada mensagem. Devolve quantas recebeu. */
   async poll(): Promise<number> {
     const queueUrl = await this.queueUrl(this.options.queueName);
-    let messages: Message[];
-    try {
-      const response = await this.sqs.send(
-        new ReceiveMessageCommand({
-          QueueUrl: queueUrl,
-          MaxNumberOfMessages: this.options.batchSize,
-          WaitTimeSeconds: this.options.waitTimeSeconds,
-          MessageSystemAttributeNames: ['ApproximateReceiveCount', 'MessageGroupId'],
-          MessageAttributeNames: ['correlationId'],
-        }),
-        {
-          abortSignal: AbortSignal.any([
-            this.stopping.signal,
-            AbortSignal.timeout(this.options.waitTimeSeconds * 1_000 + this.options.requestTimeoutMs),
-          ]),
-        },
-      );
-      messages = response.Messages ?? [];
-    } catch (error) {
-      if (this.stopping.signal.aborted) {
-        return 0;
-      }
-      throw error;
-    }
+    // O shutdown não aborta a espera: o que o SQS já tivesse entregue a esta chamada ficaria
+    // invisível até o visibility timeout vencer. A espera é curta, e o que chegar é devolvido abaixo.
+    const response = await this.sqs.send(
+      new ReceiveMessageCommand({
+        QueueUrl: queueUrl,
+        MaxNumberOfMessages: this.options.batchSize,
+        WaitTimeSeconds: this.options.waitTimeSeconds,
+        MessageSystemAttributeNames: ['ApproximateReceiveCount', 'MessageGroupId'],
+        MessageAttributeNames: ['correlationId'],
+      }),
+      { abortSignal: AbortSignal.timeout(this.options.waitTimeSeconds * 1_000 + this.options.requestTimeoutMs) },
+    );
+    const messages = response.Messages ?? [];
 
     for (const [index, message] of messages.entries()) {
       if (this.stopping.signal.aborted) {
@@ -271,6 +266,7 @@ export class SqsWagerConsumer {
         }),
         { abortSignal: AbortSignal.timeout(this.options.requestTimeoutMs) },
       );
+      this.logger.log(`released ${messages.length} unprocessed messages back to the queue`);
     } catch (error) {
       this.logger.warn(`could not release ${messages.length} messages: ${describe(error)}`);
     }

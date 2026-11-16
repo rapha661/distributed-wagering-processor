@@ -24,7 +24,7 @@ const schema = z.object({
   SQS_WAGER_DLQ: z.string().min(1).default('wager-transactions-dlq.fifo'),
   SQS_EVENTS_QUEUE: z.string().min(1).default('wallet-events.fifo'),
   SQS_CONSUMER_BATCH_SIZE: z.coerce.number().int().min(1).max(10).default(10),
-  SQS_CONSUMER_WAIT_SECONDS: z.coerce.number().int().min(0).max(20).default(10),
+  SQS_CONSUMER_WAIT_SECONDS: z.coerce.number().int().min(0).max(20).default(5),
   /** tentativas antes da DLQ; não deve passar do maxReceiveCount do redrive da fila */
   SQS_CONSUMER_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
   SQS_CONSUMER_RETRY_BASE_MS: z.coerce.number().int().positive().default(2_000),
