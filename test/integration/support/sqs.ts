@@ -2,6 +2,7 @@ import {
   CreateQueueCommand,
   DeleteMessageBatchCommand,
   DeleteQueueCommand,
+  GetQueueAttributesCommand,
   ReceiveMessageCommand,
   SQSClient,
 } from '@aws-sdk/client-sqs';
@@ -22,13 +23,43 @@ export interface TestQueue {
 }
 
 /** Fila FIFO exclusiva do teste, removida no final. */
-export async function createTestQueue(sqs: SQSClient, prefix: string): Promise<TestQueue> {
+export async function createTestQueue(sqs: SQSClient, prefix: string, attributes: Record<string, string> = {}): Promise<TestQueue> {
   const name = `${prefix}-${crypto.randomUUID().slice(0, 8)}.fifo`;
-  const { QueueUrl } = await sqs.send(new CreateQueueCommand({ QueueName: name, Attributes: { FifoQueue: 'true' } }));
+  const { QueueUrl } = await sqs.send(
+    new CreateQueueCommand({ QueueName: name, Attributes: { FifoQueue: 'true', ...attributes } }),
+  );
   if (!QueueUrl) {
     throw new Error(`could not create ${name}`);
   }
   return { name, url: QueueUrl, remove: () => sqs.send(new DeleteQueueCommand({ QueueUrl })).then(() => undefined) };
+}
+
+/** Fila de entrada com redrive para a sua DLQ, como a criada pelo docker compose. */
+export async function createConsumerQueues(
+  sqs: SQSClient,
+  options: { visibilityTimeoutSeconds?: number; maxReceiveCount?: number } = {},
+): Promise<{ source: TestQueue; deadLetter: TestQueue }> {
+  const deadLetter = await createTestQueue(sqs, 'test-wagers-dlq');
+  const { Attributes } = await sqs.send(new GetQueueAttributesCommand({ QueueUrl: deadLetter.url, AttributeNames: ['QueueArn'] }));
+  const source = await createTestQueue(sqs, 'test-wagers', {
+    VisibilityTimeout: String(options.visibilityTimeoutSeconds ?? 30),
+    RedrivePolicy: JSON.stringify({ deadLetterTargetArn: Attributes?.QueueArn, maxReceiveCount: String(options.maxReceiveCount ?? 5) }),
+  });
+  return { source, deadLetter };
+}
+
+/** Mensagens visíveis e em processamento (recebidas e ainda sem ack). */
+export async function queueDepth(sqs: SQSClient, url: string): Promise<{ visible: number; inFlight: number }> {
+  const { Attributes = {} } = await sqs.send(
+    new GetQueueAttributesCommand({
+      QueueUrl: url,
+      AttributeNames: ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible'],
+    }),
+  );
+  return {
+    visible: Number(Attributes.ApproximateNumberOfMessages ?? 0),
+    inFlight: Number(Attributes.ApproximateNumberOfMessagesNotVisible ?? 0),
+  };
 }
 
 export interface ReceivedMessage {
@@ -51,7 +82,7 @@ export async function drainQueue(sqs: SQSClient, url: string, expected = Number.
     emptyPolls = 0;
     for (const message of Messages) {
       received.push({
-        body: JSON.parse(message.Body ?? '{}'),
+        body: parseBody(message.Body),
         attributes: Object.fromEntries(
           Object.entries(message.MessageAttributes ?? {}).map(([key, value]) => [key, value.StringValue]),
         ),
@@ -65,4 +96,12 @@ export async function drainQueue(sqs: SQSClient, url: string, expected = Number.
     );
   }
   return received;
+}
+
+function parseBody(body: string | undefined): Record<string, any> {
+  try {
+    return JSON.parse(body ?? '{}');
+  } catch {
+    return { raw: body };
+  }
 }
