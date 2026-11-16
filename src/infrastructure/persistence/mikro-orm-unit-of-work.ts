@@ -26,6 +26,7 @@ import {
   OutboxEntity,
   type OutboxRecord,
   WagerTransactionEntity,
+  type WagerTransactionRecord,
   WalletEntity,
   type WalletRecord,
 } from './entities';
@@ -124,7 +125,41 @@ class MikroOrmWalletRepository implements WalletRepository {
 }
 
 class MikroOrmWagerTransactionRepository implements WagerTransactionRepository {
+  private readonly loaded = new Map<string, WagerTransactionRecord>();
+
   constructor(private readonly em: EntityManager) {}
+
+  async lockNextDuePendingReference(now: Date): Promise<WagerTransaction | undefined> {
+    const record = await this.em.findOne(
+      WagerTransactionEntity,
+      { status: WagerTransactionStatus.PendingReference, nextReferenceAttemptAt: { $lte: now } },
+      { orderBy: { nextReferenceAttemptAt: 'asc' }, lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE },
+    );
+    if (!record) {
+      return undefined;
+    }
+    this.loaded.set(record.id, record);
+    return toWagerTransaction(record);
+  }
+
+  update(transaction: WagerTransaction): void {
+    const record = this.loaded.get(transaction.id);
+    if (!record) {
+      throw new Error(`transaction ${transaction.id} must be locked before being updated`);
+    }
+    // só o estado da transição; os campos de negócio são imutáveis (e o banco recusa se mudarem)
+    const data = wagerTransactionData(transaction);
+    Object.assign(record, {
+      status: data.status,
+      referenceTransactionId: data.referenceTransactionId,
+      failureCode: data.failureCode,
+      observedBalance: data.observedBalance,
+      referenceAttempts: data.referenceAttempts,
+      nextReferenceAttemptAt: data.nextReferenceAttemptAt,
+      processedAt: data.processedAt,
+      updatedAt: data.updatedAt,
+    });
+  }
 
   async findByIdempotencyKey(idempotencyKey: string): Promise<WagerTransaction | undefined> {
     const record = await this.em.findOne(WagerTransactionEntity, { idempotencyKey });

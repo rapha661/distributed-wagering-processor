@@ -25,7 +25,14 @@ export interface WagerTransactionRepository {
   findByExternalId(providerId: string, externalTransactionId: string): Promise<WagerTransaction | undefined>;
   /** Se já existe REFUND ou ROLLBACK processado revertendo a transação. */
   hasProcessedReversal(transactionId: string): Promise<boolean>;
+  /**
+   * Trava a próxima transação PENDING_REFERENCE vencida (FOR UPDATE SKIP LOCKED):
+   * workers concorrentes nunca pegam a mesma.
+   */
+  lockNextDuePendingReference(now: Date): Promise<WagerTransaction | undefined>;
   add(transaction: WagerTransaction): void;
+  /** Registra a transição de uma transação carregada por `lockNextDuePendingReference`. */
+  update(transaction: WagerTransaction): void;
 }
 
 export interface LedgerRepository {
