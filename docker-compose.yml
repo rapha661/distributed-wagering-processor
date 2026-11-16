@@ -1,3 +1,11 @@
+x-app: &app
+  build: .
+  profiles: ["app"]
+  init: true
+  environment: &app-env
+    DATABASE_URL: postgres://wagering:wagering@postgres:5432/wagering
+    AWS_ENDPOINT_URL: http://sqs:4566
+
 services:
   postgres:
     image: postgres:17.6-alpine
@@ -31,3 +39,34 @@ services:
     volumes:
       - ./docker/sqs/create-queues.sh:/scripts/create-queues.sh:ro
     restart: "no"
+
+  # aplicação: docker compose --profile app up -d --build --scale worker=3
+  migrate:
+    <<: *app
+    command: ["bun", "run", "src/infrastructure/persistence/migrate.ts", "up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *app
+    environment:
+      <<: *app-env
+      APP_ROLE: api
+    ports:
+      - "3000:3000"
+    depends_on: &app-deps
+      migrate:
+        condition: service_completed_successfully
+      sqs-init:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *app
+    environment:
+      <<: *app-env
+      APP_ROLE: worker
+    depends_on: *app-deps
+    # tempo para concluir a mensagem em andamento depois do SIGTERM
+    stop_grace_period: 30s
