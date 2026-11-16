@@ -72,6 +72,17 @@ describe('três instâncias simultâneas', () => {
     expect(await debitsOf(wallet.id)).toBe(1);
     expect(await balanceOf(wallet.id)).toBe('975.00');
     await expectConsistent(ctx, wallet.id);
+
+    // cada submissão gera uma linha de log JSON correlacionada, sem valores
+    const transactionId = responses[0]?.body.transactionId;
+    const logged = () =>
+      instances
+        .flatMap((instance) => instance.logs())
+        .filter((line) => line.msg === 'wager transaction submitted' && line.transactionId === transactionId);
+    await waitFor(async () => logged().length === 30, 5_000, 'request logs');
+    expect(logged().every((line) => line.walletId === wallet.id && line.providerId === 'provider-a' && line.correlationId)).toBe(true);
+    expect(logged().filter((line) => !line.idempotentReplay)).toHaveLength(1);
+    expect(instances.some((instance) => instance.output().includes('"amount"'))).toBe(false);
   });
 
   it('cenário obrigatório entre instâncias: 100.00 e duas apostas de 80.00 (20 rodadas)', async () => {

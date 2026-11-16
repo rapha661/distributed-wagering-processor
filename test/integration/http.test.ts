@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import type { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../../src/app.module';
-import { createTestContext, expectConsistent, holdWalletLock, type TestContext } from './support/context';
+import { createTestContext, expectConsistent, holdWalletLock, sql, type TestContext } from './support/context';
 import { TEST_DATABASE_URL } from './support/database';
 
 let app: INestApplication;
@@ -271,5 +271,54 @@ describe('consultas', () => {
 
   it('health fica aberto', async () => {
     expect(await api('GET', '/health/live')).toMatchObject({ status: 200, body: { status: 'ok' } });
+  });
+});
+
+describe('GET /metrics', () => {
+  async function scrape(): Promise<Map<string, number>> {
+    const response = await fetch(`${baseUrl}/metrics`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/plain');
+    const samples = new Map<string, number>();
+    for (const line of (await response.text()).split('\n')) {
+      const match = /^(\S+) (\S+)$/.exec(line);
+      if (match && !line.startsWith('#')) {
+        samples.set(match[1] as string, Number(match[2]));
+      }
+    }
+    return samples;
+  }
+
+  it('expõe transações por status, duplicatas, latência, conflitos de lock, divergências e backlog', async () => {
+    const before = await scrape();
+    const wallet = await createWallet('100.00');
+    const bet = wagerBody(wallet, 'BET', '10.00');
+    await submit(bet);
+    await submit(bet);
+    await submit(wagerBody(wallet, 'BET', '500.00'));
+    const lock = await holdWalletLock(ctx, wallet.id);
+    try {
+      expect((await submit(wagerBody(wallet, 'BET', '1.00'))).status).toBe(503);
+    } finally {
+      await lock.release();
+    }
+    // wallet adulterada de propósito (fora de `touched`): a reconciliação tem que acusar
+    const tampered = await api('POST', '/wallets', {
+      body: { playerId: crypto.randomUUID(), initialBalance: { amount: '10.00', currency: 'BRL' } },
+    });
+    await sql(ctx, 'update wallets set balance = balance + 1 where id = ?', [tampered.body.id]);
+    expect(await api('POST', `/wallets/${tampered.body.id}/reconciliation`)).toMatchObject({ body: { consistent: false } });
+
+    const after = await scrape();
+    const delta = (sample: string) => (after.get(sample) ?? 0) - (before.get(sample) ?? 0);
+    expect(delta('wager_transactions_total{status="PROCESSED",source="http"}')).toBe(1);
+    expect(delta('wager_transactions_total{status="REJECTED",source="http"}')).toBe(1);
+    expect(delta('wager_duplicates_total{source="http"}')).toBe(1);
+    expect(delta('wager_processing_duration_seconds_count{source="http"}')).toBe(3);
+    expect(delta('wallet_lock_conflicts_total')).toBe(1);
+    expect(delta('wallet_reconciliation_mismatches_total')).toBe(1);
+    for (const gauge of ['outbox_pending_messages', 'outbox_lag_seconds', 'wager_pending_reference_transactions', 'wager_dead_letter_queue_messages']) {
+      expect(Number.isFinite(after.get(gauge))).toBe(true);
+    }
   });
 });

@@ -37,6 +37,7 @@ let deadLetter: TestQueue;
 const touched = new Set<string>();
 const cleanup: (() => Promise<void>)[] = [];
 const silent = createLogger('silent');
+let metrics: Metrics;
 
 beforeAll(async () => {
   ctx = await createTestContext();
@@ -59,6 +60,7 @@ afterAll(async () => {
 });
 
 async function queues(options: { visibilityTimeoutSeconds?: number } = {}) {
+  metrics = new Metrics();
   ({ source, deadLetter } = await createConsumerQueues(sqs, options));
   cleanup.push(() => source.remove(), () => deadLetter.remove());
 }
@@ -108,8 +110,14 @@ function consumer(
       ...overrides,
     },
     silent,
-    new Metrics(),
+    metrics,
   );
+}
+
+async function metric(name: string, labels: Record<string, string> = {}): Promise<number> {
+  const values = (await metrics.registry.getSingleMetric(name)?.get())?.values ?? [];
+  const match = values.find((value) => Object.entries(labels).every(([key, label]) => value.labels[key] === label));
+  return match?.value ?? 0;
 }
 
 async function pollUntil(subject: SqsWagerConsumer, done: () => Promise<boolean>, timeoutMs = 10_000) {
@@ -167,6 +175,10 @@ describe('consumidor da fila de transações', () => {
     expect(await eventsCausedBy(message.messageId)).toHaveLength(2);
     expect(await emptyQueue(source)).toBe(true);
     expect(await emptyQueue(deadLetter)).toBe(true);
+    expect(await metric('wager_transactions_total', { status: 'PROCESSED', source: 'sqs' })).toBe(1);
+    const latency = ((await metrics.registry.getSingleMetric('wager_processing_duration_seconds')?.get())?.values ??
+      []) as { metricName?: string; value: number }[];
+    expect(latency.find((value) => value.metricName === 'wager_processing_duration_seconds_count')?.value).toBe(1);
   });
 
   it('rejeição de negócio é terminal: grava REJECTED e faz ack', async () => {
@@ -230,6 +242,7 @@ describe('redelivery', () => {
     expect(await transactionsOf(command.idempotencyKey)).toHaveLength(1);
     expect(await inboxOf(message.messageId)).toHaveLength(1);
     expect(await emptyQueue(deadLetter)).toBe(true);
+    expect(await metric('wager_duplicates_total', { source: 'sqs' })).toBe(1);
   });
 
   it('mesmo messageId com outro conteúdo vai para a DLQ, sem efeito', async () => {
@@ -276,6 +289,9 @@ describe('erros permanentes e transitórios', () => {
       'WALLET_NOT_FOUND',
     ]);
     expect(dead.every((message) => message.attributes.attempts === '1')).toBe(true);
+    expect(await metric('wager_messages_dead_lettered_total', { code: 'INVALID_MESSAGE' })).toBe(2);
+    expect(await metric('wager_messages_dead_lettered_total', { code: 'WALLET_NOT_FOUND' })).toBe(1);
+    expect(await metric('wager_retries_total')).toBe(0);
     for (const command of Object.values(commands)) {
       expect(await transactionsOf(command.idempotencyKey)).toHaveLength(0);
     }
@@ -307,6 +323,7 @@ describe('erros permanentes e transitórios', () => {
     expect(await balanceOf(w.id)).toBe('75.00');
     expect(await emptyQueue(source)).toBe(true);
     expect(await emptyQueue(deadLetter)).toBe(true);
+    expect(await metric('wager_retries_total', { operation: 'sqs_message', reason: 'LOCK_TIMEOUT' })).toBe(1);
   });
 
   it('falha transitória que não passa esgota as tentativas: grava FAILED e manda para a DLQ', async () => {
@@ -335,6 +352,9 @@ describe('erros permanentes e transitórios', () => {
     expect(await balanceOf(w.id)).toBe('100.00');
     expect(await ledgerSize(w.id)).toBe(1);
     expect(await emptyQueue(source)).toBe(true);
+    expect(await metric('wager_retries_total', { operation: 'sqs_message', reason: 'DEPENDENCY_UNAVAILABLE' })).toBe(2);
+    expect(await metric('wager_transactions_total', { status: 'FAILED', source: 'sqs' })).toBe(1);
+    expect(await metric('wager_messages_dead_lettered_total', { code: 'DEPENDENCY_UNAVAILABLE' })).toBe(1);
   });
 });
 
