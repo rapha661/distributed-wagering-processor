@@ -1,6 +1,6 @@
 import { Money } from '../../domain/money/money';
 import { LedgerDirection, WalletLedgerEntry } from '../../domain/ledger/wallet-ledger-entry';
-import type { OutboxMessage } from '../../domain/messaging/outbox-message';
+import { OutboxMessage } from '../../domain/messaging/outbox-message';
 import { Wallet } from '../../domain/wallet/wallet';
 import { WagerTransaction } from '../../domain/wagering/wager-transaction';
 import type { FailureCode, WagerTransactionKind, WagerTransactionStatus } from '../../domain/wagering/wager-types';
@@ -115,6 +115,19 @@ export function ledgerEntryData(entry: WalletLedgerEntry): LedgerEntryRecord {
     balanceAfter: amountOf(entry.balanceAfter),
     createdAt: entry.createdAt,
   };
+}
+
+export function toOutboxMessage(record: OutboxRecord): OutboxMessage {
+  return OutboxMessage.rehydrate({
+    id: record.id,
+    aggregateId: record.aggregateId,
+    eventType: record.eventType,
+    payload: record.payload,
+    occurredAt: record.occurredAt,
+    attempts: record.attempts,
+    nextAttemptAt: record.nextAttemptAt,
+    publishedAt: record.publishedAt ?? undefined,
+  });
 }
 
 export function outboxData(message: OutboxMessage): OutboxRecord {

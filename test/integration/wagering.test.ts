@@ -237,6 +237,8 @@ describe('atomicidade', () => {
                 add: () => {
                   throw new Error('outbox indisponível');
                 },
+                claimDue: (now, limit) => repos.outbox.claimDue(now, limit),
+                update: (message) => repos.outbox.update(message),
               },
             }),
           ),

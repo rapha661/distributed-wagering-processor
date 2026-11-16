@@ -34,6 +34,20 @@ export interface LedgerRepository {
 
 export interface OutboxRepository {
   add(message: OutboxMessage): void;
+  /** Trava um lote de mensagens pendentes e vencidas (FOR UPDATE SKIP LOCKED), das mais antigas para as mais novas. */
+  claimDue(now: Date, limit: number): Promise<OutboxMessage[]>;
+  /** Registra publicação ou nova tentativa de uma mensagem carregada por `claimDue`. */
+  update(message: OutboxMessage): void;
+}
+
+export interface PublishResult {
+  published: string[];
+  failed: string[];
+}
+
+export interface EventPublisher {
+  /** Publica as mensagens e informa, por id, quais foram aceitas pelo broker. Não lança. */
+  publish(messages: readonly OutboxMessage[]): Promise<PublishResult>;
 }
 
 export interface TransactionalRepositories {

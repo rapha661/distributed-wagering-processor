@@ -21,10 +21,18 @@ import type {
   WagerTransactionRepository,
   WalletRepository,
 } from '../../application/ports';
-import { LedgerEntryEntity, OutboxEntity, WagerTransactionEntity, WalletEntity, type WalletRecord } from './entities';
+import {
+  LedgerEntryEntity,
+  OutboxEntity,
+  type OutboxRecord,
+  WagerTransactionEntity,
+  WalletEntity,
+  type WalletRecord,
+} from './entities';
 import {
   ledgerEntryData,
   outboxData,
+  toOutboxMessage,
   toWagerTransaction,
   toWallet,
   wagerTransactionData,
@@ -151,9 +159,32 @@ class MikroOrmLedgerRepository implements LedgerRepository {
 }
 
 class MikroOrmOutboxRepository implements OutboxRepository {
+  private readonly loaded = new Map<string, OutboxRecord>();
+
   constructor(private readonly em: EntityManager) {}
 
   add(message: OutboxMessage): void {
     this.em.create(OutboxEntity, outboxData(message));
+  }
+
+  async claimDue(now: Date, limit: number): Promise<OutboxMessage[]> {
+    const records = await this.em.find(
+      OutboxEntity,
+      { publishedAt: null, nextAttemptAt: { $lte: now } },
+      { orderBy: { occurredAt: 'asc', id: 'asc' }, limit, lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE },
+    );
+    for (const record of records) {
+      this.loaded.set(record.id, record);
+    }
+    return records.map(toOutboxMessage);
+  }
+
+  update(message: OutboxMessage): void {
+    const record = this.loaded.get(message.id);
+    if (!record) {
+      throw new Error(`outbox message ${message.id} must be claimed before being updated`);
+    }
+    const { attempts, nextAttemptAt, publishedAt } = outboxData(message);
+    Object.assign(record, { attempts, nextAttemptAt, publishedAt });
   }
 }
